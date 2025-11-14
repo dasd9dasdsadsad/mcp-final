@@ -7,10 +7,25 @@ on:
         description: 'Runtime in minutes'
         required: false
         default: '10'
+      api_url:
+        description: 'API server URL'
+        required: false
+        default: 'http://165.232.134.47:4001'
+      nats_host:
+        description: 'NATS server host'
+        required: false
+        default: '165.232.134.47'
+      manager_id:
+        description: 'Manager ID that spawned this worker'
+        required: false
+        default: 'unassigned'
+      worker_id:
+        description: 'Worker ID (auto-generated if not provided)'
+        required: false
+        default: ''
 
 env:
   MANAGER_HOST: 165.232.134.47
-  NATS_HOST: 165.232.134.47
   NATS_PORT: 4222
   REDIS_HOST: 165.232.134.47
   REDIS_PORT: 6379
@@ -20,7 +35,6 @@ env:
   POSTGRES_USER: postgres
   POSTGRES_PASSWORD: postgres
   DOCKER_IMAGE: test123434sdd/mcp-remote-worker:rest
-  API_URL: http://165.232.134.47:4001
 
 jobs:
   spawn-single-worker:
@@ -44,20 +58,53 @@ jobs:
       - name: 🚀 Spawn Single Worker
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "🚀 Spawning 1 Test Worker"
+          echo "🚀 Spawning 1 Test Worker (with API connection info)"
           echo "═══════════════════════════════════════════════════════════"
           
-          WORKER_NAME="test-worker-${{ github.run_id }}"
-          WORKER_ID="github-worker-${{ github.run_id }}-test-1"
+          # Use provided worker_id or generate one
+          if [ -n "${{ github.event.inputs.worker_id }}" ]; then
+            WORKER_ID="${{ github.event.inputs.worker_id }}"
+            echo "✅ Using provided Worker ID: $WORKER_ID"
+          else
+            WORKER_ID="github-worker-${{ github.run_id }}-test-1"
+            echo "🆔 Generated Worker ID: $WORKER_ID"
+          fi
           
-          echo "Starting Worker: $WORKER_ID"
+          WORKER_NAME="test-worker-${{ github.run_id }}"
+          
+          # Use provided API URL or default
+          API_URL="${{ github.event.inputs.api_url }}"
+          if [ -z "$API_URL" ]; then
+            API_URL="${{ env.API_URL }}"
+          fi
+          
+          # Use provided NATS host or default
+          NATS_HOST="${{ github.event.inputs.nats_host }}"
+          if [ -z "$NATS_HOST" ]; then
+            NATS_HOST="${{ env.NATS_HOST }}"
+          fi
+          
+          # Manager ID (if spawned by manager)
+          MANAGER_ID="${{ github.event.inputs.manager_id }}"
+          if [ -z "$MANAGER_ID" ]; then
+            MANAGER_ID="unassigned"
+          fi
+          
+          echo ""
+          echo "📋 Configuration:"
+          echo "   Worker ID: $WORKER_ID"
+          echo "   API URL: $API_URL"
+          echo "   NATS Host: $NATS_HOST"
+          echo "   Manager ID: $MANAGER_ID"
+          echo ""
           
           docker run -d \
             --name $WORKER_NAME \
             -e WORKER_ID="$WORKER_ID" \
             -e WORKER_TAGS="github,test,single-worker,rest-only" \
-            -e API_URL="${{ env.API_URL }}" \
-            -e NATS_HOST="${{ env.NATS_HOST }}" \
+            -e API_URL="$API_URL" \
+            -e NATS_HOST="$NATS_HOST" \
+            -e MANAGER_ID="$MANAGER_ID" \
             -e MANAGER_HOST="${{ env.MANAGER_HOST }}" \
             -e POSTGRES_HOST="${{ env.POSTGRES_HOST }}" \
             -e POSTGRES_PORT="${{ env.POSTGRES_PORT }}" \
@@ -66,7 +113,8 @@ jobs:
             -e POSTGRES_PASSWORD="${{ env.POSTGRES_PASSWORD }}" \
             ${{ env.DOCKER_IMAGE }}
           
-          echo "✅ Worker spawned"
+          echo "✅ Worker spawned with connection info"
+          echo ""
           
           # Show running containers
           docker ps --format "table {{.Names}}\t{{.Status}}"
@@ -80,9 +128,16 @@ jobs:
           RUNTIME_SECONDS=$(( ${{ github.event.inputs.runtime_minutes }} * 60 ))
           END_TIME=$(($(date +%s) + RUNTIME_SECONDS))
           
+          # Get worker ID
+          if [ -n "${{ github.event.inputs.worker_id }}" ]; then
+            WORKER_ID="${{ github.event.inputs.worker_id }}"
+          else
+            WORKER_ID="github-worker-${{ github.run_id }}-test-1"
+          fi
+          
           echo "⏱️  Configured Runtime: ${{ github.event.inputs.runtime_minutes }} minutes"
-          echo "🔗 Manager: ${{ env.MANAGER_HOST }}"
-          echo "👷 Worker ID: github-worker-${{ github.run_id }}-test-1"
+          echo "🔗 API: ${{ github.event.inputs.api_url }}"
+          echo "👷 Worker ID: $WORKER_ID"
           echo "♾️  Mode: CONTINUOUS (will restart tasks automatically)"
           echo ""
           
@@ -95,7 +150,7 @@ jobs:
             echo "[$(date '+%H:%M:%S')] Iteration $ITERATION - Worker status: $RUNNING/1 running"
             
             # Show worker logs
-            docker logs test-worker-${{ github.run_id }} --tail 3 2>&1 | grep -E "✅|📨|🚀|TASK" || echo "  (worker active...)"
+            docker logs test-worker-${{ github.run_id }} --tail 3 2>&1 | grep -E "✅|📨|🚀|TASK|Registered|Connected" || echo "  (worker active...)"
             
             # Check if we've passed the initial runtime (but don't exit)
             CURRENT_TIME=$(date +%s)
